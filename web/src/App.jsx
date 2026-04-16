@@ -58,6 +58,11 @@ function Dashboard({ token, onLogout }) {
   const [allUsers, setAllUsers] = useState([]);
   const [editingPoint, setEditingPoint] = useState(null);
   
+  // Admin Context State
+  const [viewingUserId, setViewingUserId] = useState(null);
+  const [viewingUsername, setViewingUsername] = useState(null);
+  const [newUser, setNewUser] = useState({ username: '', password: '', role: 'user' });
+  
   const defaultTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const [timeZone, setTimeZone] = useState(localStorage.getItem('timezone') || defaultTz);
   const [themePref, setThemePref] = useState(localStorage.getItem('themePref') || 'auto');
@@ -78,7 +83,7 @@ function Dashboard({ token, onLogout }) {
     fetchTracks();
     fetchSettings();
     if (isAdmin) fetchAllUsers();
-  }, []);
+  }, [viewingUserId]);
 
   useEffect(() => {
     setFilterStart('')
@@ -102,8 +107,27 @@ function Dashboard({ token, onLogout }) {
      try {
          const res = await fetch(`${API_URL}/users`, { headers: { 'Authorization': `Bearer ${token}` } });
          const data = await res.json();
-         if (Array.isArray(data)) setAllUsers(data);
+         if (Array.isArray(data)) {
+             // Extract current user ID from token to identify self
+             setAllUsers(data);
+         }
      } catch(e) {}
+  };
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    try {
+        const res = await fetch(`${API_URL}/admin/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify(newUser)
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        setNewUser({ username: '', password: '', role: 'user' });
+        fetchAllUsers();
+        alert('User created successfully');
+    } catch(err) { alert(err.message); }
   };
 
   const toggleRegistration = async () => {
@@ -120,7 +144,8 @@ function Dashboard({ token, onLogout }) {
 
   const fetchTracks = async () => {
       try {
-        const res = await fetch(`${API_URL}/tracks`, { headers: { 'Authorization': `Bearer ${token}` }})
+        const url = viewingUserId ? `${API_URL}/tracks?user_id=${viewingUserId}` : `${API_URL}/tracks`;
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }})
         if (res.status === 401 || res.status === 403) return onLogout();
         const data = await res.json()
         if (Array.isArray(data)) setTracks(data)
@@ -348,7 +373,12 @@ function Dashboard({ token, onLogout }) {
                  {maxAlt !== null && <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '18px'}}>terrain</span> {minAlt.toFixed(0)} - {maxAlt.toFixed(0)} m a.s.l.</div>}
              </div>
            )}
-          <h3 style={{ marginBottom: '16px' }}>Your Tracks</h3>
+           <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              {viewingUsername ? `Viewing ${viewingUsername}` : 'Your Tracks'}
+              {viewingUsername && (
+                  <button className="md-button secondary" onClick={() => { setViewingUserId(null); setViewingUsername(null); setSelectedTrack(null); }} style={{padding: '4px 8px', fontSize: '11px', height: 'auto', margin: 0}}>My Tracks</button>
+              )}
+           </h3>
           {tracks.length === 0 && <div>No tracks recorded yet. Start tracking on your mobile app!</div>}
           {tracks.map(t => (
             <div key={t.id} className="card" onClick={() => setSelectedTrack(t)} style={{ cursor: 'pointer', border: selectedTrack?.id === t.id ? '2px solid var(--md-sys-color-primary)' : 'none' }}>
@@ -389,7 +419,7 @@ function Dashboard({ token, onLogout }) {
                 <Popup className="geologger-popup">
                    <div className="popup-container">
                        <div className="popup-header">
-                           <div className="popup-user-info"><span className="material-symbols-outlined">account_circle</span><span style={{fontSize: '18px', fontWeight: '500'}}>{displayUsername}</span></div>
+                           <div className="popup-user-info"><span className="material-symbols-outlined">account_circle</span><span style={{fontSize: '18px', fontWeight: '500'}}>{viewingUsername || displayUsername}</span></div>
                            <div className="popup-track-name"><span className="material-symbols-outlined">architecture</span><span>{selectedTrack?.name}</span></div>
                        </div>
                        <div className="popup-main-content">
@@ -437,41 +467,59 @@ function Dashboard({ token, onLogout }) {
         </MapContainer>
       </div>
 
-       {showUsersModal && (
-          <div style={{position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-              <div style={{backgroundColor: 'var(--md-sys-color-surface)', width: '90%', maxWidth: '600px', borderRadius: '16px', padding: '24px', position: 'relative'}}>
-                  <h2 style={{margin: '0 0 20px 0'}}>User Management</h2>
-                  <div style={{maxHeight: '400px', overflowY: 'auto'}}>
-                      <table style={{width: '100%', borderCollapse: 'collapse'}}>
-                          <thead>
-                              <tr style={{borderBottom: '1px solid var(--md-sys-color-outline-variant)'}}>
-                                  <th style={{textAlign: 'left', padding: '8px'}}>Username</th>
-                                  <th style={{textAlign: 'left', padding: '8px'}}>Role</th>
-                                  <th style={{textAlign: 'left', padding: '8px'}}>Status</th>
-                                  <th style={{textAlign: 'right', padding: '8px'}}>Actions</th>
-                              </tr>
-                          </thead>
-                          <tbody>
-                              {allUsers.map(u => (
-                                  <tr key={u.id} style={{borderBottom: '1px solid var(--md-sys-color-outline-variant)'}}>
-                                      <td style={{padding: '8px'}}>{u.username}</td>
-                                      <td style={{padding: '8px'}}>{u.role}</td>
-                                      <td style={{padding: '8px'}}>{u.status}</td>
-                                      <td style={{padding: '8px', textAlign: 'right'}}>
-                                          <button onClick={() => handleUserAction(u.id, 'status', u.status === 'blocked' ? 'active' : 'blocked')} style={{marginRight: '8px', color: u.status === 'blocked' ? 'green' : 'orange', background: 'none', border: 'none', cursor: 'pointer'}}>{u.status === 'blocked' ? 'Unblock' : 'Block'}</button>
-                                          {u.role !== 'admin' && (
-                                            <button onClick={() => handleUserAction(u.id, 'delete')} style={{color: 'red', background: 'none', border: 'none', cursor: 'pointer'}}>Delete</button>
-                                          )}
-                                      </td>
-                                  </tr>
-                              ))}
-                          </tbody>
-                      </table>
-                  </div>
-                  <button onClick={() => setShowUsersModal(false)} className="md-button primary" style={{marginTop: '20px', width: '100%'}}>Close</button>
-              </div>
-          </div>
-       )}
+        {showUsersModal && (
+           <div style={{position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+               <div style={{backgroundColor: 'var(--md-sys-color-surface)', width: '90%', maxWidth: '600px', borderRadius: '16px', padding: '24px', position: 'relative'}}>
+                   <h2 style={{margin: '0 0 20px 0'}}>User Management</h2>
+                   
+                   <div style={{marginBottom: '20px', borderBottom: '1px solid var(--md-sys-color-outline-variant)', paddingBottom: '20px'}}>
+                       <h4 style={{marginBottom: '10px'}}>Add New User</h4>
+                       <form onSubmit={handleCreateUser} style={{display: 'flex', gap: '8px'}}>
+                           <input type="text" placeholder="Username" className="md-input" style={{flex: 1, margin: 0}} value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
+                           <input type="password" placeholder="Password" className="md-input" style={{flex: 1, margin: 0}} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
+                           <select className="md-input" style={{width: '90px', margin: 0, height: '40px'}} value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
+                               <option value="user">User</option>
+                               <option value="admin">Admin</option>
+                           </select>
+                           <button type="submit" className="md-button primary" style={{padding: '0 16px', height: '40px', margin: 0}}>Add</button>
+                       </form>
+                   </div>
+                   
+                   <div style={{maxHeight: '300px', overflowY: 'auto'}}>
+                       <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                           <thead>
+                               <tr style={{borderBottom: '1px solid var(--md-sys-color-outline-variant)'}}>
+                                   <th style={{textAlign: 'left', padding: '8px', fontSize: '13px'}}>User</th>
+                                   <th style={{textAlign: 'left', padding: '8px', fontSize: '13px'}}>Role</th>
+                                   <th style={{textAlign: 'right', padding: '8px', fontSize: '13px'}}>Actions</th>
+                               </tr>
+                           </thead>
+                           <tbody style={{fontSize: '13px'}}>
+                               {allUsers.map(u => (
+                                   <tr key={u.id} style={{borderBottom: '1px solid var(--md-sys-color-outline-variant)'}}>
+                                       <td style={{padding: '8px'}}>
+                                           <div style={{fontWeight: '500'}}>{u.username}</div>
+                                           <div style={{fontSize: '11px', color: 'gray'}}>{u.status}</div>
+                                       </td>
+                                       <td style={{padding: '8px'}}>{u.role}</td>
+                                       <td style={{padding: '8px', textAlign: 'right'}}>
+                                           <button onClick={() => { setViewingUserId(u.id); setViewingUsername(u.username); setShowUsersModal(false); setSelectedTrack(null); }} style={{marginRight: '12px', color: 'var(--md-sys-color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: '500'}}>View Map</button>
+                                           {u.username !== displayUsername && (
+                                              <>
+                                               <button onClick={() => handleUserAction(u.id, 'status', u.status === 'blocked' ? 'active' : 'blocked')} style={{marginRight: '12px', color: u.status === 'blocked' ? 'green' : 'orange', background: 'none', border: 'none', cursor: 'pointer'}}>{u.status === 'blocked' ? 'Unblock' : 'Block'}</button>
+                                               <button onClick={() => handleUserAction(u.id, 'delete')} style={{color: 'red', background: 'none', border: 'none', cursor: 'pointer'}}>Delete</button>
+                                              </>
+                                           )}
+                                       </td>
+                                   </tr>
+                               ))}
+                           </tbody>
+                       </table>
+                   </div>
+                   <button onClick={() => setShowUsersModal(false)} className="md-button secondary" style={{marginTop: '20px', width: '100%'}}>Close</button>
+               </div>
+           </div>
+        )}
     </div>
   );
 }

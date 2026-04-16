@@ -139,7 +139,14 @@ app.post('/api/tracks/:id/positions', authenticateToken, (req, res) => {
 
 // Get tracks for logged in user (or all if admin requested)
 app.get('/api/tracks', authenticateToken, (req, res) => {
-  db.all("SELECT * FROM tracks WHERE user_id = ? ORDER BY start_time DESC", [req.user.id], (err, rows) => {
+  let targetUserId = req.user.id;
+  
+  // Admin can view others
+  if (req.user.role === 'admin' && req.query.user_id) {
+    targetUserId = req.query.user_id;
+  }
+
+  db.all("SELECT * FROM tracks WHERE user_id = ? ORDER BY start_time DESC", [targetUserId], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -471,14 +478,26 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
 
 app.patch('/api/admin/users/:id/status', authenticateToken, requireAdmin, (req, res) => {
   const { status } = req.body;
-  db.run("UPDATE users SET status = ? WHERE id = ?", [status, req.params.id], function(err) {
+  const targetId = parseInt(req.params.id);
+
+  if (targetId === req.user.id && status === 'blocked') {
+    return res.status(400).json({ error: 'You cannot block your own administrative account.' });
+  }
+
+  db.run("UPDATE users SET status = ? WHERE id = ?", [status, targetId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
   });
 });
 
 app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
-  db.run("DELETE FROM users WHERE id = ?", [req.params.id], function(err) {
+  const targetId = parseInt(req.params.id);
+
+  if (targetId === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own administrative account.' });
+  }
+
+  db.run("DELETE FROM users WHERE id = ?", [targetId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
   });
