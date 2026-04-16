@@ -24,34 +24,87 @@ The project consists of three main components: a Dockerized Node.js Server, a Vi
 
 ---
 
-## 🚀 Getting Started
+## 🔒 Critical Security Configuration
 
-### Backend Setup
-1. Open the project root.
-2. Launch the server using Docker Compose:
+Before deploying, you **MUST** change the default `JWT_SECRET`. This key signs authentication tokens. If left as default, your server is insecure.
+
+### Docker Compose
+Edit `docker-compose.yml`:
+```yaml
+environment:
+  - JWT_SECRET=your_new_random_long_string_here
+```
+
+---
+
+## 🚀 Deployment Options
+
+### 🐳 Option 1: Docker Compose (Recommended)
+1. **Launch the server using Docker Compose:**
 ```bash
 docker-compose up -d
 ```
-The server will now be listening on `http://localhost:3000`. If you run locally without Docker, simply `cd server && npm start`.
+The server will now be listening on `http://localhost:3000`. 
+- **Persistent Data:** Stored in the `./data` directory relative to the project root.
 
-### Web Dashboard
-1. Navigate into the Web application package.
-2. Run the frontend locally:
+### 🏗️ Option 2: Manual Docker Build
+If you prefer not to use Compose:
+1. **Build the image**:
 ```bash
-cd web
-npm install
-npm run dev
+docker build -t geologger-server .
+```
+2. **Run the container**:
+```bash
+docker run -dp 3000:3000 \
+  --name geologger-server \
+  --restart unless-stopped \
+  -v "$(pwd)/data:/app/data" \
+  -e JWT_SECRET="your_secret_here" \
+  geologger-server
 ```
 
-### Mobile App (Android)
-1. Navigate to the mobile package.
-2. Start the Expo builder:
+### 💻 Option 3: Direct Node.js Deployment (No Docker)
+If you wish to run the project directly on your host machine:
+
+#### 1. Build the Frontend
 ```bash
-cd mobile
-npm install
-npx expo start
+cd web && npm install && npm run build
 ```
-Use the **Expo Go** application on your personal Android device to scan the rendered QR code and try out the background tracker locally!
+
+#### 2. Start the Backend
+1. Ensure the contents of `web/dist` are copied to `server/public`.
+2. Install server dependencies:
+```bash
+cd server && npm install
+```
+3. Start the Server:
+```bash
+# Set JWT_SECRET in environment first
+node index.js
+```
+
+---
+
+## 🌐 Port Exposure
+
+By default, the server runs on port **3000**.
+To change this, modify the `ports` section in `docker-compose.yml`:
+```yaml
+ports:
+  - "8080:3000"  # Exposes the app on host port 8080
+```
+
+---
+
+## 🆙 Upgrading
+
+To upgrade your GeoLogger instance to the latest version:
+
+### Using Docker Compose:
+```bash
+git pull                   # Get latest code
+docker-compose up --build -d  # Rebuild and restart
+```
 
 ---
 

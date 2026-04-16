@@ -6,13 +6,19 @@ const { XMLParser } = require('fast-xml-parser');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev_only';
+let JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    JWT_SECRET = crypto.randomBytes(32).toString('hex');
+    console.warn('⚠️  WARNING: JWT_SECRET not provided. A random secret has been generated for this session.');
+    console.warn('⚠️  NOTE: All user sessions will be invalidated if the server restarts.');
+}
 const PORT = process.env.PORT || 3000;
 
 // Authentication Middleware
