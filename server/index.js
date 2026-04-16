@@ -10,6 +10,7 @@ const db = require('./db');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev_only';
 const PORT = process.env.PORT || 3000;
@@ -45,24 +46,33 @@ const requireAdmin = (req, res, next) => {
 // 1. Auth & Users
 app.post('/api/auth/register', async (req, res) => {
   const { username, password } = req.body;
-  // If no users exist, make the first one an admin
-  db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    
-    const role = row.count === 0 ? 'admin' : 'user';
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    db.run(
-      "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-      [username, hashedPassword, role],
-      function(err) {
-        if (err) {
-          if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username taken' });
-          return res.status(500).json({ error: err.message });
-        }
-        res.status(201).json({ id: this.lastID, username, role });
+  
+  // Check if registration is enabled
+  db.get("SELECT value FROM settings WHERE key = 'public_registration'", async (err, setting) => {
+    // If not found or disabled, block registration (unless it's the first user)
+    db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      
+      const isFirstUser = row.count === 0;
+      if (!isFirstUser && setting && setting.value !== 'enabled') {
+        return res.status(403).json({ error: 'Public registration is currently disabled by administrator.' });
       }
-    );
+
+      const role = isFirstUser ? 'admin' : 'user';
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      db.run(
+        "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+        [username, hashedPassword, role],
+        function(err) {
+          if (err) {
+            if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username taken' });
+            return res.status(500).json({ error: err.message });
+          }
+          res.status(201).json({ id: this.lastID, username, role });
+        }
+      );
+    });
   });
 });
 
@@ -71,6 +81,7 @@ app.post('/api/auth/login', (req, res) => {
   db.get("SELECT * FROM users WHERE username = ?", [username], async (err, user) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+    if (user.status === 'blocked') return res.status(403).json({ error: 'Your account has been blocked by an administrator.' });
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) return res.status(400).json({ error: 'Invalid credentials' });
@@ -81,7 +92,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/users', authenticateToken, requireAdmin, (req, res) => {
-  db.all("SELECT id, username, role, created_at FROM users", [], (err, rows) => {
+  db.all("SELECT id, username, role, status, created_at FROM users", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -142,6 +153,23 @@ app.get('/api/tracks/:id/positions', authenticateToken, (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(rows);
     });
+  });
+});
+
+// Position CRUD (Admin Only)
+app.patch('/api/positions/:id', authenticateToken, requireAdmin, (req, res) => {
+  const { lat, lng, altitude, timestamp } = req.body;
+  db.run(`UPDATE positions SET lat = ?, lng = ?, altitude = ?, timestamp = ? WHERE id = ?`,
+    [lat, lng, altitude, timestamp, req.params.id], function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    });
+});
+
+app.delete('/api/positions/:id', authenticateToken, requireAdmin, (req, res) => {
+  db.run(`DELETE FROM positions WHERE id = ?`, [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
   });
 });
 
@@ -217,10 +245,14 @@ app.all(['/index.php', '/'], async (req, res, next) => {
         function insertPosition(tId) {
             db.run(
               `INSERT INTO positions (track_id, lat, lng, altitude, speed, bearing, accuracy, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                  tId, lat, lon || payload.lng, altitude, speed, bearing, accuracy, 
-                  time ? new Date(parseInt(time) * 1000).toISOString() : new Date().toISOString()
-              ],
+          [
+              tId, lat, lon || payload.lng, 
+              altitude !== undefined ? altitude : null, 
+              speed !== undefined ? speed : null, 
+              bearing !== undefined ? bearing : null, 
+              accuracy !== undefined ? accuracy : null, 
+              time ? new Date(parseInt(time) * 1000).toISOString() : new Date().toISOString()
+          ],
               (err) => {
                   if (err) return res.status(500).json({ error: true });
                   res.json({ error: false, message: 'Position added' });
@@ -402,15 +434,47 @@ app.get('/api/tracks/:id/kml', authenticateToken, (req, res) => {
   });
 });
 
-// Admin fetching all tracks
-app.get('/api/admin/tracks', authenticateToken, requireAdmin, (req, res) => {
-  db.all(`SELECT tracks.*, users.username, COUNT(positions.id) as point_count 
-          FROM tracks 
-          JOIN users ON tracks.user_id = users.id 
-          LEFT JOIN positions ON positions.track_id = tracks.id
-          GROUP BY tracks.id ORDER BY tracks.start_time DESC`, [], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
+// Settings API
+app.get('/api/settings', (req, res) => {
+  db.all("SELECT * FROM settings", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const settings = {};
+    rows.forEach(r => settings[r.key] = r.value);
+    res.json(settings);
+  });
+});
+
+app.patch('/api/settings', authenticateToken, requireAdmin, (req, res) => {
+  const { key, value } = req.body;
+  db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [key, value], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
+  });
+});
+
+// Admin User Management
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { username, password, role } = req.body;
+  const hashedPassword = await bcrypt.hash(password, 10);
+  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+    [username, hashedPassword, role || 'user'], function(err) {
+      if (err) return res.status(400).json({ error: err.message });
+      res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.patch('/api/admin/users/:id/status', authenticateToken, requireAdmin, (req, res) => {
+  const { status } = req.body;
+  db.run("UPDATE users SET status = ? WHERE id = ?", [status, req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
+  });
+});
+
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
+  db.run("DELETE FROM users WHERE id = ?", [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
   });
 });
 

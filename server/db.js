@@ -22,8 +22,23 @@ const db = new sqlite3.Database(dbFile, (err) => {
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         role TEXT DEFAULT 'user',
+        status TEXT DEFAULT 'active',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`);
+
+      // Legacy Migration: Add status if it doesn't exist
+      db.run(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`, (err) => {
+        // Ignore error if column already exists
+      });
+
+      // Settings table
+      db.run(`CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )`, () => {
+        // Seed default settings
+        db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('public_registration', 'enabled')`);
+      });
 
       // Tracks table (a track is a collection of continuous positions)
       db.run(`CREATE TABLE IF NOT EXISTS tracks (

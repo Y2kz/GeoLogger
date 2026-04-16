@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Alert, ScrollView, useColorScheme } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { StyleSheet, View, Alert, ScrollView, useColorScheme, BackHandler } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SQLite from 'expo-sqlite';
@@ -8,10 +8,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 const LOCATION_TASK_NAME = 'background-location-task';
 
-// Init DB
 const db = SQLite.openDatabaseSync('geologger_offline.db');
 
 db.execSync(`
+  PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS positions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lat REAL,
@@ -20,107 +20,94 @@ db.execSync(`
     speed REAL,
     bearing REAL,
     accuracy REAL,
-    timestamp DATETIME
+    timestamp TEXT
   );
   CREATE TABLE IF NOT EXISTS config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    id INTEGER PRIMARY KEY,
     server_url TEXT,
     username TEXT,
     password TEXT,
-    auto_sync INTEGER DEFAULT 0
+    auto_sync INTEGER,
+    collection_interval_m INTEGER,
+    sync_interval_s INTEGER,
+    track_prefix TEXT,
+    split_interval TEXT,
+    split_custom_h INTEGER,
+    theme_mode TEXT,
+    last_sync_time INTEGER
   );
+  INSERT OR IGNORE INTO config (id, server_url, username, password, auto_sync, collection_interval_m, sync_interval_s, track_prefix, split_interval, split_custom_h, theme_mode) 
+  VALUES (1, '', '', '', 0, 10, 60, 'GeoLogger', 'daily', 12, 'auto');
 `);
 
-// Database Migrations
-try { db.runSync('ALTER TABLE config ADD COLUMN collection_interval_m INTEGER DEFAULT 10'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN sync_interval_s INTEGER DEFAULT 60'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN last_sync_time INTEGER DEFAULT 0'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN track_prefix TEXT DEFAULT "GeoLogger"'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN split_interval TEXT DEFAULT "daily"'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN split_custom_h INTEGER DEFAULT 12'); } catch(e) {}
-try { db.runSync('ALTER TABLE config ADD COLUMN theme_mode TEXT DEFAULT "auto"'); } catch(e) {}
-
-// Try inserting default config row if empty
-try { db.runSync('INSERT INTO config (id, server_url, username, password, auto_sync, collection_interval_m, sync_interval_s, last_sync_time, track_prefix, split_interval, split_custom_h, theme_mode) VALUES (1, "", "", "", 0, 10, 60, 0, "GeoLogger", "daily", 12, "auto")'); } catch(e) {}
-
-// Add advanced metric columns via migration if user upgrades from old version
-try { db.runSync('ALTER TABLE positions ADD COLUMN altitude REAL'); } catch(e) {}
-try { db.runSync('ALTER TABLE positions ADD COLUMN speed REAL'); } catch(e) {}
-try { db.runSync('ALTER TABLE positions ADD COLUMN bearing REAL'); } catch(e) {}
-try { db.runSync('ALTER TABLE positions ADD COLUMN accuracy REAL'); } catch(e) {}
-
-const pushPointToServer = async (config, pos) => {
-    if (!config.server_url || !config.username) return { ok: false, error: 'Missing Config' };
+async function pushPointToServer(config, p) {
+    if (!config.server_url) return { ok: false, error: 'No server' };
     try {
-        const timeSecs = Math.floor(new Date(pos.timestamp).getTime() / 1000);
-        let baseUrl = config.server_url.trim();
+        const baseUrl = config.server_url.trim();
         const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-        
-        const data = { 
-            action: 'addpos', 
-            user: config.username, 
-            pass: config.password, 
-            lat: pos.lat, lon: pos.lng, time: timeSecs,
-            altitude: pos.altitude, speed: pos.speed, bearing: pos.bearing, accuracy: pos.accuracy,
-            track_prefix: config.track_prefix || 'GeoLogger',
-            split_interval: config.split_interval === 'custom' ? `custom:${config.split_custom_h || 12}` : (config.split_interval || 'daily')
-        };
-        const formBody = Object.keys(data).filter(k => data[k] !== undefined && data[k] !== null).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
-        
         const res = await fetch(`${url}/index.php`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-            body: formBody
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'addpos',
+                user: config.username,
+                pass: config.password,
+                lat: p.lat,
+                lon: p.lng,
+                altitude: p.altitude,
+                speed: p.speed,
+                bearing: p.bearing,
+                accuracy: p.accuracy,
+                time: Math.floor(new Date(p.timestamp).getTime() / 1000),
+                track_prefix: config.track_prefix,
+                split_interval: config.split_interval,
+                split_custom_h: config.split_custom_h
+            })
         });
-        
-        const rawText = await res.text();
-        if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${rawText}` };
-        
-        try {
-           const result = JSON.parse(rawText);
-           return { ok: result.error === false, error: result.message || 'Unknown server error' };
-        } catch(e) {
-           return { ok: false, error: 'Invalid JSON response from server' };
-        }
-    } catch(e) {
-        return { ok: false, error: `Network: ${e.message}` };
+        const json = await res.json();
+        if (res.ok && !json.error) return { ok: true };
+        return { ok: false, error: json.message || 'Server error' };
+    } catch (e) {
+        return { ok: false, error: e.message };
     }
-};
+}
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
-  if (error || !data) return;
-  const location = data.locations[0];
-  if (!location) return;
+  if (error) return;
+  if (data) {
+    const { locations } = data;
+    const now = Math.floor(Date.now() / 1000);
+    const config = db.getFirstSync('SELECT * FROM config WHERE id = 1');
+    
+    let successAny = false;
+    for (const loc of locations) {
+      const p = {
+        lat: loc.coords.latitude,
+        lng: loc.coords.longitude,
+        altitude: loc.coords.altitude,
+        speed: loc.coords.speed,
+        bearing: loc.coords.heading,
+        accuracy: loc.coords.accuracy,
+        timestamp: new Date(loc.timestamp).toISOString()
+      };
+      
+      db.runSync(
+        'INSERT INTO positions (lat, lng, altitude, speed, bearing, accuracy, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [p.lat, p.lng, p.altitude, p.speed, p.bearing, p.accuracy, p.timestamp]
+      );
 
-  const lat = location.coords.latitude;
-  const lng = location.coords.longitude;
-  const alt = location.coords.altitude || null;
-  const spd = location.coords.speed || null;
-  const brg = location.coords.heading || null; // expo-location calls it heading
-  const acc = location.coords.accuracy || null;
-  const isoTime = new Date(location.timestamp).toISOString();
-  
-  db.runSync('INSERT INTO positions (lat, lng, altitude, speed, bearing, accuracy, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)', [lat, lng, alt, spd, brg, acc, isoTime]);
-
-  const config = db.getFirstSync('SELECT * FROM config WHERE id = 1');
-  if (!config || config.auto_sync !== 1) return;
-
-  const now = Math.floor(Date.now() / 1000);
-  const syncInterval = config.sync_interval_s || 60;
-  
-  if (now - (config.last_sync_time || 0) >= syncInterval) {
-      const positions = db.getAllSync('SELECT * FROM positions');
-      let successAny = false;
-      for (const p of positions) {
+      if (config && config.auto_sync === 1 && config.server_url) {
           const res = await pushPointToServer(config, p);
           if (res.ok) {
-              db.runSync('DELETE FROM positions WHERE id = ?', [p.id]);
-              successAny = true;
+             const row = db.getFirstSync('SELECT id FROM positions WHERE timestamp = ?', [p.timestamp]);
+             if (row) db.runSync('DELETE FROM positions WHERE id = ?', [row.id]);
+             successAny = true;
           }
       }
-      if (successAny) {
-         db.runSync('UPDATE config SET last_sync_time = ? WHERE id = 1', [now]);
-      }
+    }
+    if (successAny) {
+       db.runSync('UPDATE config SET last_sync_time = ? WHERE id = 1', [now]);
+    }
   }
 });
 
@@ -134,11 +121,60 @@ export default function App() {
   const theme = effectiveTheme === 'dark' ? MD3DarkTheme : MD3LightTheme;
   const [offlineCount, setOfflineCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [serverStatus, setServerStatus] = useState(null);
+  const isSettingsActive = useRef(false);
+
+  useEffect(() => {
+    const handleBack = () => {
+      if (isConfiguring) {
+        setIsConfiguring(false);
+        return true;
+      }
+      return false;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', handleBack);
+    return () => sub.remove();
+  }, [isConfiguring]);
+
+  const checkServerPing = async () => {
+    const c = db.getFirstSync('SELECT * FROM config WHERE id = 1');
+    if (!c || !c.server_url) {
+      setServerStatus('error');
+      return;
+    }
+    try {
+        const baseUrl = c.server_url.trim();
+        const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        const res = await fetch(`${url}/index.php`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: `action=auth&user=${encodeURIComponent(c.username)}&pass=${encodeURIComponent(c.password)}`
+        });
+        const json = await res.json();
+        if (res.ok && !json.error) {
+            setServerStatus('ok');
+        } else {
+            setServerStatus('error');
+        }
+    } catch(e) {
+        setServerStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    isSettingsActive.current = isConfiguring;
+  }, [isConfiguring]);
 
   useEffect(() => {
     loadConfig();
     checkStatus();
-    const interval = setInterval(checkStatus, 3000);
+    checkServerPing();
+    const interval = setInterval(() => {
+        if (!isSettingsActive.current) {
+            checkStatus();
+            checkServerPing();
+        }
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -178,15 +214,16 @@ export default function App() {
            ]);
         }
       } catch(e) {
-        Alert.alert("Save Error", e.message);
+        Alert.alert("Database Error", "Failed to save configuration: " + e.message);
       }
   };
 
   const checkStatus = async () => {
+    const row = db.getFirstSync('SELECT count(*) as count FROM positions');
+    if (row) setOfflineCount(row.count);
+    
     const tracking = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
     setIsTracking(tracking);
-    const result = db.getFirstSync('SELECT COUNT(*) as count FROM positions');
-    if (result) setOfflineCount(result.count);
   };
 
   const toggleTracking = async () => {
@@ -194,19 +231,15 @@ export default function App() {
       await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       setIsTracking(false);
     } else {
-      loadConfig(); 
-      const liveConfig = db.getFirstSync('SELECT * FROM config WHERE id = 1');
-      if (!liveConfig || !liveConfig.server_url) return Alert.alert("Hold on", "Please configure the Server URL first.");
-      
-      const { status: fg } = await Location.requestForegroundPermissionsAsync();
-      if (fg !== 'granted') return Alert.alert("Error", "Foreground location permission required.");
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return Alert.alert("Error", "Location permission required!");
       
       const { status: bg } = await Location.requestBackgroundPermissionsAsync();
       if (bg !== 'granted') return Alert.alert("Error", "Background location permission rigidly required by Android API!");
 
       await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
         accuracy: Location.Accuracy.Highest, 
-        distanceInterval: liveConfig.collection_interval_m || 10, 
+        distanceInterval: config.collection_interval_m || 10, 
         deferredUpdatesInterval: 1000,
         showsBackgroundLocationIndicator: true,
       });
@@ -244,7 +277,6 @@ export default function App() {
   };
 
   if (isConfiguring) {
-      // Wrap in View to forcefully enforce actual Paper theme background locally
       return (
         <PaperProvider theme={theme}>
           <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -256,51 +288,29 @@ export default function App() {
                 <TextInput label="Server URL (http://ip:3000)" value={config.server_url} onChangeText={t => setConfig({...config, server_url: t})} mode="outlined" style={styles.input} />
                 <TextInput label="Username" value={config.username} onChangeText={t => setConfig({...config, username: t})} mode="outlined" style={styles.input} />
                 <TextInput label="Password" secureTextEntry value={config.password} onChangeText={t => setConfig({...config, password: t})} mode="outlined" style={styles.input} />
-                
-                <Text style={{marginTop: 15, marginBottom: 10, fontWeight: 'bold'}}>Track Settings</Text>
                 <TextInput label="Track Base Name" value={config.track_prefix} onChangeText={t => setConfig({...config, track_prefix: t})} mode="outlined" style={styles.input} />
-                
-                <Text style={{fontSize: 12, marginBottom: 5}}>Automatic Cloud Track Splicing</Text>
+                <Text style={styles.label}>Splicing</Text>
                 <SegmentedButtons
                     value={config.split_interval}
                     onValueChange={v => setConfig({...config, split_interval: v})}
-                    buttons={[
-                        { value: 'never', label: 'Off' },
-                        { value: 'daily', label: 'Day' },
-                        { value: 'weekly', label: 'Week' },
-                        { value: 'monthly', label: 'Mon' },
-                        { value: 'custom', label: 'Custom' },
-                    ]}
+                    buttons={[{ value: 'never', label: 'Off' }, { value: 'daily', label: 'Day' }, { value: 'weekly', label: 'Week' }, { value: 'monthly', label: 'Mon' }, { value: 'custom', label: 'Custom' }]}
                 />
-                
                 {config.split_interval === 'custom' && (
-                    <TextInput label="Custom Chunk Limit (Hours)" keyboardType="numeric" value={config.split_custom_h?.toString()} onChangeText={t => setConfig({...config, split_custom_h: t})} mode="outlined" style={styles.input} />
+                    <TextInput label="Hours" keyboardType="numeric" value={config.split_custom_h?.toString()} onChangeText={t => setConfig({...config, split_custom_h: t})} mode="outlined" style={styles.input} />
                 )}
-                
-                <Text style={{marginTop: 15, marginBottom: 5, fontWeight: 'bold'}}>App Theme</Text>
+                <Text style={styles.label}>Theme</Text>
                 <SegmentedButtons
                     value={config.theme_mode}
                     onValueChange={v => setConfig({...config, theme_mode: v})}
-                    buttons={[
-                        { value: 'auto', label: 'System' },
-                        { value: 'light', label: 'Light' },
-                        { value: 'dark', label: 'Dark' }
-                    ]}
+                    buttons={[{ value: 'auto', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
                 />
-
-                <View style={[styles.inlineRow, {marginTop: 20}]}>
-                    <Text variant="titleMedium">Auto-Sync in Background</Text>
+                <View style={styles.inlineRow}>
+                    <Text>Auto-Sync</Text>
                     <Switch value={config.auto_sync === 1} onValueChange={v => setConfig({...config, auto_sync: v ? 1 : 0})} />
                 </View>
-
-                {config.auto_sync === 1 && (
-                    <TextInput label="Sync Interval (Seconds)" keyboardType="numeric" value={config.sync_interval_s.toString()} onChangeText={t => setConfig({...config, sync_interval_s: t})} mode="outlined" style={styles.input} />
-                )}
-
-                <Text style={{marginTop: 15, marginBottom: -5, fontWeight: 'bold'}}>GPS Hardware Config</Text>
-                <TextInput label="Data Collection Interval (Meters)" keyboardType="numeric" value={config.collection_interval_m.toString()} onChangeText={t => setConfig({...config, collection_interval_m: t})} mode="outlined" style={styles.input} />
-
-                <Button mode="contained" onPress={saveConfig} style={{marginTop: 20, marginBottom: 40}}>Save & Return</Button>
+                <TextInput label="Sync(s)" keyboardType="numeric" value={config.sync_interval_s.toString()} onChangeText={t => setConfig({...config, sync_interval_s: t})} mode="outlined" style={styles.input} />
+                <TextInput label="Collect(m)" keyboardType="numeric" value={config.collection_interval_m.toString()} onChangeText={t => setConfig({...config, collection_interval_m: t})} mode="outlined" style={styles.input} />
+                <Button mode="contained" onPress={saveConfig} style={styles.button}>Save</Button>
             </ScrollView>
           </View>
         </PaperProvider>
@@ -312,41 +322,28 @@ export default function App() {
       <PaperProvider theme={theme}>
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
           <Appbar.Header style={{ backgroundColor: theme.colors.primaryContainer }}>
-            <Appbar.Content title="GeoLogger Tracker" />
-          <Appbar.Action icon="cog" onPress={() => setIsConfiguring(true)} />
-        </Appbar.Header>
-        
-        <View style={styles.container}>
-          <Card style={styles.card}>
-            <Card.Content>
-              <Text variant="titleLarge">Status: </Text>
-              <Text variant="bodyMedium" style={{color: isTracking ? 'green' : 'gray', fontWeight: 'bold'}}>
-                  {isTracking ? "Active Background Tracking" : "Standby"}
-              </Text>
-            </Card.Content>
-          </Card>
-
-          <Card style={styles.card}>
-            <Card.Content>
-              <Text variant="titleMedium">Database Integration</Text>
-              <Text variant="bodyMedium" numberOfLines={1}>Target: {config.server_url || 'Not set'}</Text>
-              <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10}}>
-                 <Text variant="titleMedium">{offlineCount}</Text>
-                 <Text>points queued for upload</Text>
-              </View>
-              <Button style={styles.button} mode="contained-tonal" icon="cloud-upload" loading={isSyncing} onPress={forceSync}>
-                Force Sync Data
-              </Button>
-            </Card.Content>
-          </Card>
-
-          <Button 
-             style={styles.mainButton} mode="contained" icon={isTracking ? "stop" : "map-marker"} 
-             buttonColor={isTracking ? theme.colors.error : theme.colors.primary} onPress={toggleTracking}
-          >
-            {isTracking ? "Stop Tracker" : "Engage Tracking"}
-          </Button>
-        </View>
+            <Appbar.Content 
+              title="GeoLogger Tracker" 
+              subtitle={serverStatus === 'ok' ? 'Connected' : (serverStatus === 'error' ? 'Check Server' : 'Checking...')}
+              subtitleStyle={{ color: serverStatus === 'ok' ? '#4CAF50' : (serverStatus === 'error' ? '#F44336' : '#FFC107') }}
+            />
+            <Appbar.Action icon="cog" onPress={() => setIsConfiguring(true)} />
+          </Appbar.Header>
+          <View style={styles.container}>
+            <Card style={styles.card}>
+              <Card.Content>
+                <Text variant="titleLarge">Status: </Text>
+                <Text variant="bodyMedium" style={{color: isTracking ? 'green' : 'gray', fontWeight: 'bold'}}>
+                    {isTracking ? "Active" : "Standby"}
+                </Text>
+              </Card.Content>
+            </Card>
+            <Text style={{textAlign: 'center', marginVertical: 10}}>{offlineCount} points queued</Text>
+            <Button mode="contained-tonal" icon="cloud-upload" loading={isSyncing} onPress={forceSync} style={styles.card}>Sync All</Button>
+            <Button mode="contained" icon={isTracking ? "stop" : "map-marker"} buttonColor={isTracking ? theme.colors.error : theme.colors.primary} onPress={toggleTracking} style={styles.mainButton}>
+              {isTracking ? "Stop Tracker" : "Start Tracking"}
+            </Button>
+          </View>
         </View>
       </PaperProvider>
     </SafeAreaProvider>
@@ -356,8 +353,9 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   card: { marginBottom: 16 },
-  button: { marginTop: 16 },
-  input: { marginBottom: 16, marginTop: 10 },
-  mainButton: { padding: 8, marginTop: 'auto', marginBottom: 32 },
-  inlineRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderRadius: 8, paddingHorizontal: 15, borderWidth: 1, borderColor: '#888'}
+  input: { marginBottom: 16 },
+  label: { marginTop: 15, marginBottom: 5, fontWeight: 'bold' },
+  button: { marginTop: 20, marginBottom: 40 },
+  mainButton: { padding: 8, marginTop: 'auto' },
+  inlineRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10}
 });
