@@ -34,7 +34,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --md-sys-color-primary: #53dbc8;
     --md-sys-color-on-primary: #003731;
     --md-sys-color-primary-container: #005048;
@@ -56,6 +56,34 @@
     --md-sys-color-error: #ffb4ab;
     --md-sys-color-on-error: #690005;
   }
+}
+
+:root[data-theme="dark"] {
+    --md-sys-color-primary: #53dbc8;
+    --md-sys-color-on-primary: #003731;
+    --md-sys-color-primary-container: #005048;
+    --md-sys-color-on-primary-container: #74f8e5;
+    
+    --md-sys-color-secondary: #b0ccc6;
+    --md-sys-color-on-secondary: #1c3531;
+    --md-sys-color-secondary-container: #334b47;
+    --md-sys-color-on-secondary-container: #cce8e2;
+
+    --md-sys-color-background: #191c1b;
+    --md-sys-color-on-background: #e1e3e0;
+    --md-sys-color-surface: #191c1b;
+    --md-sys-color-on-surface: #e1e3e0;
+    --md-sys-color-surface-variant: #3f4947;
+    --md-sys-color-on-surface-variant: #bec9c6;
+    
+    --md-sys-color-outline: #899390;
+    --md-sys-color-error: #ffb4ab;
+    --md-sys-color-on-error: #690005;
+}
+
+:root[data-theme="dark"] input[type="datetime-local"], 
+:root[data-theme="dark"] select {
+    color-scheme: dark;
 }
 
 * {
@@ -192,4 +220,20 @@ h1, h2, h3, h4, h5, h6 {
   font-size: var(--md-sys-typescale-headline-large);
   color: var(--md-sys-color-primary);
   margin-bottom: 24px;
+}
+
+input[type="datetime-local"], select {
+  font-family: inherit;
+  color-scheme: light dark;
+  background-color: var(--md-sys-color-surface-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-small);
+  transition: all 0.2s ease-in-out;
+  outline: none;
+}
+
+input[type="datetime-local"]:focus, select:focus {
+  border-color: var(--md-sys-color-primary);
+  box-shadow: 0 0 0 1px var(--md-sys-color-primary);
 }

@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
+const { XMLParser } = require('fast-xml-parser');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
@@ -145,19 +147,21 @@ app.get('/api/tracks/:id/positions', authenticateToken, (req, res) => {
 
 // 3. Legacy uLogger Compatibility API
 app.use(express.urlencoded({ extended: true }));
-app.all('/index.php', async (req, res) => {
+app.all(['/index.php', '/'], async (req, res, next) => {
   const payload = req.method === 'POST' ? req.body : req.query;
   const { action, user, pass } = payload;
   
+  if (!action) return next(); // Not a legacy request, pass to next handlers
+  
   if (!user || !pass) {
-    return res.status(401).send('Authentication missing');
+    return res.status(401).json({ error: true, message: 'Authentication missing' });
   }
 
   // Basic auth verification for legacy clients
   db.get("SELECT * FROM users WHERE username = ?", [user], async (err, dbUser) => {
-    if (err || !dbUser) return res.status(401).send('Invalid credentials');
+    if (err || !dbUser) return res.status(401).json({ error: true, message: 'Invalid credentials' });
     const validPassword = await bcrypt.compare(pass, dbUser.password);
-    if (!validPassword) return res.status(401).send('Invalid credentials');
+    if (!validPassword) return res.status(401).json({ error: true, message: 'Invalid credentials' });
 
     // Authenticated
     if (action === 'auth') {
@@ -178,11 +182,32 @@ app.all('/index.php', async (req, res) => {
       // Verify track belongs to user
       db.get("SELECT id FROM tracks WHERE id = ? AND user_id = ?", [trackid, dbUser.id], (err, track) => {
         if (err || !track) {
-           // Fallback: create a default track if app doesn't specify an existing one properly
-           db.run("INSERT INTO tracks (user_id, name) VALUES (?, ?)", [dbUser.id, "Default uLogger Track"], function(err) {
-              if (err) return res.status(500).json({ error: true, message: 'Track not found and fallback failed' });
-              const newTrackId = this.lastID;
-              insertPosition(newTrackId);
+           const prefix = payload.track_prefix || "Auto-Sync Track";
+           const interval = payload.split_interval || "daily";
+           let trackName = prefix;
+           
+           if (interval === 'daily') {
+               trackName = `${prefix} (${new Date().toISOString().split('T')[0]})`;
+           } else if (interval === 'weekly') {
+               // Approximate weekly suffix
+               const d = new Date();
+               const week = Math.ceil(d.getDate() / 7);
+               trackName = `${prefix} (Week ${week}, ${d.getFullYear()}-${d.getMonth()+1})`;
+           } else if (interval === 'monthly') {
+               trackName = `${prefix} (${new Date().toISOString().substring(0, 7)})`;
+           } else if (interval.startsWith('custom:')) {
+               const hours = parseInt(interval.split(':')[1]) || 24;
+               const chunk = Math.floor(Date.now() / (1000 * 60 * 60 * hours));
+               trackName = `${prefix} (Block H${hours}-${chunk})`;
+           }
+
+           db.get("SELECT id FROM tracks WHERE user_id = ? AND name = ?", [dbUser.id, trackName], (err, autoTrack) => {
+               if (autoTrack) return insertPosition(autoTrack.id);
+               
+               db.run("INSERT INTO tracks (user_id, name) VALUES (?, ?)", [dbUser.id, trackName], function(err) {
+                  if (err) return res.status(500).json({ error: true, message: 'Track fallback failed' });
+                  insertPosition(this.lastID);
+               });
            });
            return;
         } else {
@@ -206,10 +231,101 @@ app.all('/index.php', async (req, res) => {
       return;
     }
 
-    res.status(400).send('Unknown action');
+    res.status(400).json({ error: true, message: 'Unknown action' });
   });
 });
 
+
+// Clear All Tracks
+app.delete('/api/tracks/all', authenticateToken, (req, res) => {
+  const query = req.user.role === 'admin' ? "DELETE FROM tracks" : "DELETE FROM tracks WHERE user_id = ?";
+  const params = req.user.role === 'admin' ? [] : [req.user.id];
+  db.run(query, params, function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, message: 'All tracks cleared' });
+  });
+});
+
+// Export All Tracks as GPX
+app.get('/api/tracks/all/gpx', authenticateToken, (req, res) => {
+  const query = req.user.role === 'admin' 
+    ? "SELECT tracks.name as tname, tracks.id as tid, positions.* FROM positions JOIN tracks ON tracks.id = positions.track_id ORDER BY tracks.id, timestamp ASC" 
+    : "SELECT tracks.name as tname, tracks.id as tid, positions.* FROM positions JOIN tracks ON tracks.id = positions.track_id WHERE tracks.user_id = ? ORDER BY tracks.id, timestamp ASC";
+  const params = req.user.role === 'admin' ? [] : [req.user.id];
+  
+  db.all(query, params, (err, points) => {
+      if (err) return res.status(500).json({ error: err.message });
+      
+      let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="GeoLogger">\n`;
+      let currentTrackId = null;
+
+      points.forEach(p => {
+          if (p.tid !== currentTrackId) {
+              if (currentTrackId !== null) gpx += `    </trkseg>\n  </trk>\n`;
+              currentTrackId = p.tid;
+              gpx += `  <trk>\n    <name>${p.tname || 'Unknown'}</name>\n    <trkseg>\n`;
+          }
+          gpx += `      <trkpt lat="${p.lat}" lon="${p.lng}">\n`;
+          if (p.altitude) gpx += `        <ele>${p.altitude}</ele>\n`;
+          gpx += `        <time>${p.timestamp}</time>\n`;
+          gpx += `      </trkpt>\n`;
+      });
+      if (currentTrackId !== null) gpx += `    </trkseg>\n  </trk>\n`;
+      gpx += `</gpx>`;
+      
+      res.header('Content-Type', 'application/gpx+xml');
+      res.attachment(`geologger_full_export.gpx`);
+      res.send(gpx);
+  });
+});
+
+// GPX Import
+const upload = multer({ storage: multer.memoryStorage() });
+app.post('/api/tracks/import/gpx', authenticateToken, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  
+  try {
+     const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_" });
+     const jsonObj = parser.parse(req.file.buffer.toString());
+     
+     if (!jsonObj.gpx || !jsonObj.gpx.trk) {
+         return res.status(400).json({ error: 'Invalid GPX format. Missing <trk> tags.'});
+     }
+
+     const tracksArr = Array.isArray(jsonObj.gpx.trk) ? jsonObj.gpx.trk : [jsonObj.gpx.trk];
+     
+     db.serialize(() => {
+         let importedCount = 0;
+         tracksArr.forEach(trk => {
+             const trackName = trk.name || "Imported GPX Track";
+             db.run("INSERT INTO tracks (user_id, name) VALUES (?, ?)", [req.user.id, trackName], function(err) {
+                 if (err) return;
+                 const newTrackId = this.lastID;
+                 
+                 const segments = Array.isArray(trk.trkseg) ? trk.trkseg : [trk.trkseg];
+                 segments.forEach(seg => {
+                     if (!seg || !seg.trkpt) return;
+                     const points = Array.isArray(seg.trkpt) ? seg.trkpt : [seg.trkpt];
+                     
+                     const stmt = db.prepare(`INSERT INTO positions (track_id, lat, lng, altitude, timestamp) VALUES (?, ?, ?, ?, ?)`);
+                     points.forEach(p => {
+                         if(!p["@_lat"] || !p["@_lon"]) return;
+                         let timeStr = p.time || new Date().toISOString();
+                         stmt.run(newTrackId, p["@_lat"], p["@_lon"], p.ele || null, timeStr);
+                         importedCount++;
+                     });
+                     stmt.finalize();
+                 });
+             });
+         });
+         // Since it's serialized we assume basic sequential execution
+         setTimeout(() => res.json({ success: true, message: `Imported tracks geometry in background.`}), 500);
+     });
+     
+  } catch (e) {
+     return res.status(500).json({ error: 'XML Parsing error: ' + e.message });
+  }
+});
 
 // Track Deletion
 app.delete('/api/tracks/:id', authenticateToken, (req, res) => {
