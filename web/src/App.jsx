@@ -332,14 +332,17 @@ function App() {
              <label htmlFor="gpx-upload" className="md-button secondary" style={{flex: 1, padding: '5px', textAlign:'center', cursor:'pointer', margin: 0}}>
                  Import GPX
              </label>
-             <div style={{display:'flex', flex: '100%', gap: '5px', marginTop: '5px'}}>
-                 <select value={timeZone} onChange={e => handleTzChange(e.target.value)} style={{flex: 1, padding: '5px'}}>
-                    {timezonesArray.map(tz => <option key={tz} value={tz}>{getTzLabel(tz)}</option>)}
-                 </select>
-                 <button className="md-button secondary" onClick={handleClearAll} style={{flex: 1, color: 'var(--md-sys-color-error)', padding: '5px'}}>
-                     Clear DB
-                 </button>
-             </div>
+              <div style={{display:'flex', flex: '100%', gap: '8px', marginTop: '8px', flexDirection: 'column'}}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '8px', width: '100%'}}>
+                    <span className="material-symbols-outlined" style={{fontSize: '18px', color: 'var(--md-sys-color-primary)'}}>public</span>
+                    <select value={timeZone} onChange={e => handleTzChange(e.target.value)} style={{flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--md-sys-color-outline)', backgroundColor: 'var(--md-sys-color-surface)', fontSize: '13.5px'}}>
+                       {timezonesArray.map(tz => <option key={tz} value={tz}>{getTzLabel(tz)}</option>)}
+                    </select>
+                  </div>
+                  <button className="md-button secondary" onClick={handleClearAll} style={{width: '100%', color: 'var(--md-sys-color-error)', padding: '6px', border: '1px dashed var(--md-sys-color-error)', background: 'transparent', fontSize: '12px', height: 'auto', margin: '0'}}>
+                      <span className="material-symbols-outlined" style={{fontSize: '16px', verticalAlign: 'middle', marginRight: '4px'}}>delete_forever</span> Clear All Database Records
+                  </button>
+              </div>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
