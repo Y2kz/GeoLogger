@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Server
+server/node_modules/
+server/data/
+*.sqlite
+
+# Web App
+web/node_modules/
+web/dist/
+
+# Mobile App
+mobile/node_modules/
+mobile/.expo/
+mobile/android/app/build/
+mobile/ios/build/
+
+# Environment
+.env
+.env.local
+
+# OS Files
+.DS_Store
+Thumbs.db

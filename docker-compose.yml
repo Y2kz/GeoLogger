@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  geologger-server:
+    build:
+      context: ./server
+    ports:
+      - "3000:3000"
+    volumes:
+      - geologger_data:/app/data
+    environment:
+      - JWT_SECRET=your_super_secret_jwt_string_change_in_production
+      - DB_PATH=/app/data/geologger.sqlite
+      - PORT=3000
+
+volumes:
+  geologger_data:
+    name: geologger_data
