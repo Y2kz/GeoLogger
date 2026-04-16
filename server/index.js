@@ -15,7 +15,11 @@ const PORT = process.env.PORT || 3000;
 // Authentication Middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  let token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token && req.query.token) {
+     token = req.query.token;
+  }
   
   if (token == null) return res.sendStatus(401);
 
@@ -206,6 +210,101 @@ app.all('/index.php', async (req, res) => {
   });
 });
 
+
+// Track Deletion
+app.delete('/api/tracks/:id', authenticateToken, (req, res) => {
+  const trackId = req.params.id;
+  db.get("SELECT user_id FROM tracks WHERE id = ?", [trackId], (err, track) => {
+     if (err) return res.status(500).json({ error: err.message });
+     // User can only delete their own tracks unless admin
+     if (!track || (track.user_id !== req.user.id && req.user.role !== 'admin')) {
+         return res.status(403).json({ error: 'Unauthorized to delete this track' });
+     }
+     db.run("DELETE FROM tracks WHERE id = ?", [trackId], function(err) {
+         if (err) return res.status(500).json({ error: err.message });
+         res.json({ success: true, message: 'Track and cascaded positions deleted' });
+     });
+  });
+});
+
+// GPX Export
+app.get('/api/tracks/:id/gpx', authenticateToken, (req, res) => {
+  const trackId = req.params.id;
+  db.get("SELECT * FROM tracks WHERE id = ?", [trackId], (err, track) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!track || (track.user_id !== req.user.id && req.user.role !== 'admin')) {
+         return res.status(403).json({ error: 'Unauthorized' });
+      }
+
+      db.all("SELECT lat, lng, altitude, timestamp FROM positions WHERE track_id = ? ORDER BY timestamp ASC", [trackId], (err, points) => {
+         if (err) return res.status(500).json({ error: err.message });
+         
+         let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="GeoLogger">\n`;
+         gpx += `  <trk>\n    <name>${track.name}</name>\n    <trkseg>\n`;
+         
+         points.forEach(p => {
+             gpx += `      <trkpt lat="${p.lat}" lon="${p.lng}">\n`;
+             if (p.altitude) gpx += `        <ele>${p.altitude}</ele>\n`;
+             gpx += `        <time>${p.timestamp}</time>\n`;
+             gpx += `      </trkpt>\n`;
+         });
+
+         gpx += `    </trkseg>\n  </trk>\n</gpx>`;
+         
+         res.header('Content-Type', 'application/gpx+xml');
+         res.attachment(`track_${trackId}.gpx`);
+         res.send(gpx);
+      });
+  });
+});
+
+// KML Export
+app.get('/api/tracks/:id/kml', authenticateToken, (req, res) => {
+  const trackId = req.params.id;
+  db.get("SELECT * FROM tracks WHERE id = ?", [trackId], (err, track) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!track || (track.user_id !== req.user.id && req.user.role !== 'admin')) {
+         return res.status(403).json({ error: 'Unauthorized' });
+      }
+
+      db.all("SELECT lat, lng, altitude, timestamp FROM positions WHERE track_id = ? ORDER BY timestamp ASC", [trackId], (err, points) => {
+         if (err) return res.status(500).json({ error: err.message });
+         
+         let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n`;
+         kml += `  <Document>\n    <name>${track.name}</name>\n    <Placemark>\n      <name>${track.name} Path</name>\n      <LineString>\n        <coordinates>\n`;
+         
+         points.forEach(p => {
+             kml += `          ${p.lng},${p.lat}${p.altitude ? ','+p.altitude : ''}\n`;
+         });
+
+         kml += `        </coordinates>\n      </LineString>\n    </Placemark>\n  </Document>\n</kml>`;
+         
+         res.header('Content-Type', 'application/vnd.google-earth.kml+xml');
+         res.attachment(`track_${trackId}.kml`);
+         res.send(kml);
+      });
+  });
+});
+
+// Admin fetching all tracks
+app.get('/api/admin/tracks', authenticateToken, requireAdmin, (req, res) => {
+  db.all(`SELECT tracks.*, users.username, COUNT(positions.id) as point_count 
+          FROM tracks 
+          JOIN users ON tracks.user_id = users.id 
+          LEFT JOIN positions ON positions.track_id = tracks.id
+          GROUP BY tracks.id ORDER BY tracks.start_time DESC`, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+  });
+});
+
+// Serve Static Web Frontend
+const path = require('path');
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.use((req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

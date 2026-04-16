@@ -3,7 +3,7 @@ version: '3.8'
 services:
   geologger-server:
     build:
-      context: ./server
+      context: .
     ports:
       - "3000:3000"
     volumes:
