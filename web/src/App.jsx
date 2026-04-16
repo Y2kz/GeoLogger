@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { MapContainer, TileLayer, Marker, Polyline, CircleMarker, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet'
 
 function MapFitter({ positions }) {
   const map = useMap();
@@ -65,6 +65,24 @@ function App() {
       } catch(e) {
           return new Date(ts).toLocaleString(); // Fallback if TZ is invalid
       }
+  };
+
+  const getUsernameFromToken = () => {
+     try {
+       if (!token) return '';
+       const payload = JSON.parse(atob(token.split('.')[1]));
+       return payload.username || '';
+     } catch(e) { return '' }
+  };
+  const displayUsername = username || getUsernameFromToken();
+
+  const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; 
+    const dLat = (lat2-lat1) * (Math.PI/180);
+    const dLon = (lon2-lon1) * (Math.PI/180); 
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*(Math.PI/180)) * Math.cos(lat2*(Math.PI/180)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+    return R * c;
   };
 
   const API_URL = '/api'
@@ -214,6 +232,45 @@ function App() {
     return true;
   });
 
+  let tripDuration = '0s';
+  let totalDistance = 0;
+  let avgSpeed = 0;
+  let maxAlt = null;
+  let minAlt = null;
+
+  if (filteredPositions.length > 1) {
+      const pCount = filteredPositions.length;
+      const safeStartTs = filteredPositions[0].timestamp.endsWith('Z') || filteredPositions[0].timestamp.includes('+') ? filteredPositions[0].timestamp : filteredPositions[0].timestamp.replace(' ', 'T') + 'Z';
+      const safeEndTs = filteredPositions[pCount-1].timestamp.endsWith('Z') || filteredPositions[pCount-1].timestamp.includes('+') ? filteredPositions[pCount-1].timestamp : filteredPositions[pCount-1].timestamp.replace(' ', 'T') + 'Z';
+      
+      const tStart = new Date(safeStartTs);
+      const tEnd = new Date(safeEndTs);
+      
+      const seconds = Math.floor((tEnd - tStart) / 1000);
+      if (seconds > 0) {
+          const days = Math.floor(seconds / 86400);
+          const hrs = Math.floor((seconds % 86400) / 3600);
+          const mins = Math.floor((seconds % 3600) / 60);
+          const secs = seconds % 60;
+          tripDuration = `${days > 0 ? days + 'd ' : ''}${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+
+      let dist = 0;
+      for (let i=0; i<pCount-1; i++) {
+         dist += getDistanceFromLatLonInKm(filteredPositions[i].lat, filteredPositions[i].lng, filteredPositions[i+1].lat, filteredPositions[i+1].lng);
+      }
+      totalDistance = dist;
+      
+      const hours = seconds / 3600;
+      if (hours > 0) avgSpeed = totalDistance / hours;
+      
+      const alts = filteredPositions.filter(p => p.altitude !== null && p.altitude !== undefined).map(p => p.altitude);
+      if (alts.length > 0) {
+          maxAlt = Math.max(...alts);
+          minAlt = Math.min(...alts);
+      }
+  }
+
   const polylineCoords = filteredPositions.map(p => [p.lat, p.lng]);
 
   return (
@@ -247,6 +304,15 @@ function App() {
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
+           {selectedTrack && positions.length > 0 && (
+             <div style={{ backgroundColor: 'var(--md-sys-color-surface-variant)', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
+                 <h4 style={{margin: '0 0 10px 0', borderBottom: '1px solid var(--md-sys-color-outline)', paddingBottom: '5px'}}>Trip Summary</h4>
+                 <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '18px'}}>sync_alt</span> {totalDistance.toFixed(2)} km</div>
+                 <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '18px'}}>schedule</span> {tripDuration}</div>
+                 <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '18px'}}>speed</span> {avgSpeed.toFixed(2)} km/h</div>
+                 {maxAlt !== null && <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '18px'}}>terrain</span> {minAlt.toFixed(0)} - {maxAlt.toFixed(0)} m a.s.l.</div>}
+             </div>
+           )}
           <h3 style={{ marginBottom: '16px' }}>Your Tracks</h3>
           {tracks.length === 0 && <div>No tracks recorded yet. Start tracking on your mobile app!</div>}
           {tracks.map(t => (
@@ -301,11 +367,30 @@ function App() {
           )}
 
           {/* Node Render Engine (Mimicking F-Droid layout) */}
-          {polylineCoords.map((coord, i) => (
+          {filteredPositions.map((p, i) => (
              <CircleMarker 
-                key={i} center={coord} radius={4} 
+                key={i} center={[p.lat, p.lng]} radius={4} 
                 fillColor="white" color="black" weight={1} fillOpacity={1} 
-             />
+             >
+                <Popup className="geologger-popup">
+                   <div style={{minWidth: '220px', fontFamily: 'monospace'}}>
+                       <strong style={{fontSize: '14px', borderBottom: '1px solid #ccc', paddingBottom: '4px', display: 'block', marginBottom: '8px', wordBreak: 'break-all'}}>
+                           <span className="material-symbols-outlined" style={{fontSize: '14px', verticalAlign: 'middle'}}>person</span> {displayUsername} <br/>
+                           <span className="material-symbols-outlined" style={{fontSize: '14px', verticalAlign: 'middle'}}>route</span> {selectedTrack?.name}
+                       </strong>
+                       <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>calendar_today</span> {formatTime(p.timestamp)}</div>
+                       {p.speed !== null && p.speed !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>speed</span> {(p.speed * 3.6).toFixed(2)} km/h</div>}
+                       {p.altitude !== null && p.altitude !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>terrain</span> {p.altitude.toFixed(0)} m a.s.l.</div>}
+                       {p.accuracy !== null && p.accuracy !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>gps_fixed</span> {p.accuracy.toFixed(0)} m </div>}
+                       {p.bearing !== null && p.bearing !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>explore</span> {p.bearing.toFixed(0)}° </div>}
+                       <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>pin_drop</span> {p.lng.toFixed(4)}°E {p.lat.toFixed(4)}°N</div>
+                       
+                       <div style={{marginTop: '10px', paddingTop: '5px', borderTop: '1px solid #ccc', fontSize: '11px', color: 'gray'}}>
+                           Point {i + 1} of {filteredPositions.length}
+                       </div>
+                   </div>
+                </Popup>
+             </CircleMarker>
           ))}
 
         </MapContainer>

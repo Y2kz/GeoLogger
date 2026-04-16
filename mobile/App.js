@@ -16,6 +16,10 @@ db.execSync(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lat REAL,
     lng REAL,
+    altitude REAL,
+    speed REAL,
+    bearing REAL,
+    accuracy REAL,
     timestamp DATETIME
   );
   CREATE TABLE IF NOT EXISTS config (
@@ -39,10 +43,16 @@ try { db.runSync('ALTER TABLE config ADD COLUMN theme_mode TEXT DEFAULT "auto"')
 // Try inserting default config row if empty
 try { db.runSync('INSERT INTO config (id, server_url, username, password, auto_sync, collection_interval_m, sync_interval_s, last_sync_time, track_prefix, split_interval, split_custom_h, theme_mode) VALUES (1, "", "", "", 0, 10, 60, 0, "GeoLogger", "daily", 12, "auto")'); } catch(e) {}
 
-const pushPointToServer = async (config, lat, lng, timestamp) => {
+// Add advanced metric columns via migration if user upgrades from old version
+try { db.runSync('ALTER TABLE positions ADD COLUMN altitude REAL'); } catch(e) {}
+try { db.runSync('ALTER TABLE positions ADD COLUMN speed REAL'); } catch(e) {}
+try { db.runSync('ALTER TABLE positions ADD COLUMN bearing REAL'); } catch(e) {}
+try { db.runSync('ALTER TABLE positions ADD COLUMN accuracy REAL'); } catch(e) {}
+
+const pushPointToServer = async (config, pos) => {
     if (!config.server_url || !config.username) return { ok: false, error: 'Missing Config' };
     try {
-        const timeSecs = Math.floor(new Date(timestamp).getTime() / 1000);
+        const timeSecs = Math.floor(new Date(pos.timestamp).getTime() / 1000);
         let baseUrl = config.server_url.trim();
         const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
         
@@ -50,11 +60,12 @@ const pushPointToServer = async (config, lat, lng, timestamp) => {
             action: 'addpos', 
             user: config.username, 
             pass: config.password, 
-            lat, lon: lng, time: timeSecs,
+            lat: pos.lat, lon: pos.lng, time: timeSecs,
+            altitude: pos.altitude, speed: pos.speed, bearing: pos.bearing, accuracy: pos.accuracy,
             track_prefix: config.track_prefix || 'GeoLogger',
             split_interval: config.split_interval === 'custom' ? `custom:${config.split_custom_h || 12}` : (config.split_interval || 'daily')
         };
-        const formBody = Object.keys(data).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
+        const formBody = Object.keys(data).filter(k => data[k] !== undefined && data[k] !== null).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
         
         const res = await fetch(`${url}/index.php`, {
             method: 'POST',
@@ -83,9 +94,13 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 
   const lat = location.coords.latitude;
   const lng = location.coords.longitude;
+  const alt = location.coords.altitude || null;
+  const spd = location.coords.speed || null;
+  const brg = location.coords.heading || null; // expo-location calls it heading
+  const acc = location.coords.accuracy || null;
   const isoTime = new Date(location.timestamp).toISOString();
   
-  db.runSync('INSERT INTO positions (lat, lng, timestamp) VALUES (?, ?, ?)', [lat, lng, isoTime]);
+  db.runSync('INSERT INTO positions (lat, lng, altitude, speed, bearing, accuracy, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)', [lat, lng, alt, spd, brg, acc, isoTime]);
 
   const config = db.getFirstSync('SELECT * FROM config WHERE id = 1');
   if (!config || config.auto_sync !== 1) return;
@@ -97,7 +112,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
       const positions = db.getAllSync('SELECT * FROM positions');
       let successAny = false;
       for (const p of positions) {
-          const res = await pushPointToServer(config, p.lat, p.lng, p.timestamp);
+          const res = await pushPointToServer(config, p);
           if (res.ok) {
               db.runSync('DELETE FROM positions WHERE id = ?', [p.id]);
               successAny = true;
@@ -209,7 +224,7 @@ export default function App() {
       let lastError = "";
       
       for (const p of positions) {
-          const res = await pushPointToServer(config, p.lat, p.lng, p.timestamp);
+          const res = await pushPointToServer(config, p);
           if (res.ok) {
               db.runSync('DELETE FROM positions WHERE id = ?', [p.id]);
               successCount++;
