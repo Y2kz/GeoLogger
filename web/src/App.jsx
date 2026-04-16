@@ -273,6 +273,41 @@ function App() {
 
   const polylineCoords = filteredPositions.map(p => [p.lat, p.lng]);
 
+  const positionsWithProgress = React.useMemo(() => {
+    let cumulativeDist = 0;
+    const result = [];
+    for (let i = 0; i < filteredPositions.length; i++) {
+        const p = filteredPositions[i];
+        if (i > 0) {
+            cumulativeDist += getDistanceFromLatLonInKm(filteredPositions[i-1].lat, filteredPositions[i-1].lng, p.lat, p.lng);
+        }
+        
+        const safeStartTs = filteredPositions[0].timestamp.endsWith('Z') || filteredPositions[0].timestamp.includes('+') ? filteredPositions[0].timestamp : filteredPositions[0].timestamp.replace(' ', 'T') + 'Z';
+        const safeCurrentTs = p.timestamp.endsWith('Z') || p.timestamp.includes('+') ? p.timestamp : p.timestamp.replace(' ', 'T') + 'Z';
+        
+        const seconds = Math.floor((new Date(safeCurrentTs) - new Date(safeStartTs)) / 1000);
+        let durationFormatted = '0s';
+        if (seconds > 0) {
+            const days = Math.floor(seconds / 86400);
+            const hrs = Math.floor((seconds % 86400) / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            durationFormatted = `${days > 0 ? days + 'd ' : ''}${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        const hours = seconds / 3600;
+        const avgSpeedAtPoint = hours > 0 ? cumulativeDist / hours : 0;
+
+        result.push({
+            ...p,
+            cumulativeDist,
+            durationFormatted,
+            avgSpeedAtPoint
+        });
+    }
+    return result;
+  }, [filteredPositions]);
+
   return (
     <div className="app-container">
       <div className="sidebar">
@@ -367,26 +402,84 @@ function App() {
           )}
 
           {/* Node Render Engine (Mimicking F-Droid layout) */}
-          {filteredPositions.map((p, i) => (
+          {positionsWithProgress.map((p, i) => (
              <CircleMarker 
                 key={i} center={[p.lat, p.lng]} radius={4} 
                 fillColor="white" color="black" weight={1} fillOpacity={1} 
              >
                 <Popup className="geologger-popup">
-                   <div style={{minWidth: '220px', fontFamily: 'monospace'}}>
-                       <strong style={{fontSize: '14px', borderBottom: '1px solid #ccc', paddingBottom: '4px', display: 'block', marginBottom: '8px', wordBreak: 'break-all'}}>
-                           <span className="material-symbols-outlined" style={{fontSize: '14px', verticalAlign: 'middle'}}>person</span> {displayUsername} <br/>
-                           <span className="material-symbols-outlined" style={{fontSize: '14px', verticalAlign: 'middle'}}>route</span> {selectedTrack?.name}
-                       </strong>
-                       <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>calendar_today</span> {formatTime(p.timestamp)}</div>
-                       {p.speed !== null && p.speed !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>speed</span> {(p.speed * 3.6).toFixed(2)} km/h</div>}
-                       {p.altitude !== null && p.altitude !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>terrain</span> {p.altitude.toFixed(0)} m a.s.l.</div>}
-                       {p.accuracy !== null && p.accuracy !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>gps_fixed</span> {p.accuracy.toFixed(0)} m </div>}
-                       {p.bearing !== null && p.bearing !== undefined && <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>explore</span> {p.bearing.toFixed(0)}° </div>}
-                       <div style={{display: 'flex', gap: '5px', alignItems: 'center', marginBottom: '4px'}}><span className="material-symbols-outlined" style={{fontSize: '16px'}}>pin_drop</span> {p.lng.toFixed(4)}°E {p.lat.toFixed(4)}°N</div>
+                   <div className="popup-container">
+                       <div className="popup-header">
+                           <div className="popup-user-info">
+                               <span className="material-symbols-outlined">account_circle</span>
+                               <span style={{fontSize: '18px', fontWeight: '500'}}>{displayUsername}</span>
+                           </div>
+                           <div className="popup-track-name">
+                               <span className="material-symbols-outlined">architecture</span>
+                               <span>{selectedTrack?.name}</span>
+                           </div>
+                       </div>
                        
-                       <div style={{marginTop: '10px', paddingTop: '5px', borderTop: '1px solid #ccc', fontSize: '11px', color: 'gray'}}>
-                           Point {i + 1} of {filteredPositions.length}
+                       <div className="popup-main-content">
+                           <div className="popup-left-pane">
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">today</span>
+                                   <span>{formatTime(p.timestamp).split(',')[0]}</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">schedule</span>
+                                   <span>{formatTime(p.timestamp).split(',')[1]}</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">speed</span>
+                                   <span>{(p.speed * 3.6).toFixed(2)} km/h</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">terrain</span>
+                                   <span>{p.altitude?.toFixed(0) || 0} m a.s.l.</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">satellite_alt</span>
+                                   <span>{p.accuracy?.toFixed(0) || 0} m 🛰️</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">explore</span>
+                                   <span>{p.bearing?.toFixed(0) || 0}°</span>
+                               </div>
+                               <div className="popup-row">
+                                   <span className="material-symbols-outlined">location_on</span>
+                                   <span>{p.lng.toFixed(4)}°E {p.lat.toFixed(4)}°N</span>
+                               </div>
+                           </div>
+
+                           <div className="popup-right-pane">
+                               <div className="popup-stat-block">
+                                   <span className="material-symbols-outlined" style={{color: '#90caf9'}}>history</span>
+                                   <div className="popup-stat-value">
+                                       <span className="stat-num">{p.durationFormatted}</span>
+                                       <span className="stat-label">Duration</span>
+                                   </div>
+                               </div>
+                               <div className="popup-stat-block">
+                                   <span className="material-symbols-outlined" style={{color: '#81c784'}}>directions_run</span>
+                                   <div className="popup-stat-value">
+                                       <span className="stat-num">{p.avgSpeedAtPoint.toFixed(2)} km/h</span>
+                                       <span className="stat-label">Avg. Speed</span>
+                                   </div>
+                               </div>
+                               <div className="popup-stat-block">
+                                   <span className="material-symbols-outlined" style={{color: '#ffb74d'}}>move_down</span>
+                                   <div className="popup-stat-value">
+                                       <span className="stat-num">{p.cumulativeDist.toFixed(2)} km</span>
+                                       <span className="stat-label">Distance</span>
+                                   </div>
+                               </div>
+                           </div>
+                       </div>
+
+                       <div className="popup-footer">
+                           <span>Point {i + 1} of {filteredPositions.length}</span>
+                           <span className="edit-link">Edit position</span>
                        </div>
                    </div>
                 </Popup>

@@ -1,5 +1,5 @@
 # -- Stage 1: Build Web Front-End --
-FROM node:18-alpine AS web-build
+FROM node:22-alpine AS web-build
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm install
@@ -7,7 +7,7 @@ COPY web/ .
 RUN npm run build
 
 # -- Stage 2: Backend Node API --
-FROM node:18-alpine
+FROM node:22-alpine
 WORKDIR /app
 
 # Install server dependencies

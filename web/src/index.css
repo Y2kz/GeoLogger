@@ -237,3 +237,142 @@ input[type="datetime-local"]:focus, select:focus {
   border-color: var(--md-sys-color-primary);
   box-shadow: 0 0 0 1px var(--md-sys-color-primary);
 }
+
+/* Leaflet Popup Premium Overrides */
+.geologger-popup .leaflet-popup-content-wrapper {
+    background-color: #333333; /* Deep Slate Surface */
+    color: #e0e0e0;
+    border-radius: 12px;
+    padding: 0;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.geologger-popup .leaflet-popup-content {
+    margin: 0;
+    width: auto !important;
+}
+
+.geologger-popup .leaflet-popup-tip {
+    background-color: #333333;
+}
+
+.geologger-popup .leaflet-popup-close-button {
+    color: #fff !important;
+    padding: 8px 8px 0 0 !important;
+    font-size: 20px !important;
+}
+
+.popup-container {
+    min-width: 420px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.popup-header {
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+}
+
+.popup-user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.popup-user-info .material-symbols-outlined {
+    font-size: 24px;
+    color: #88cfff;
+}
+
+.popup-track-name {
+    font-size: 14px;
+    color: #b0bec5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.popup-main-content {
+    display: flex;
+    gap: 24px;
+}
+
+.popup-left-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.popup-right-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-left: 1px solid rgba(255,255,255,0.1);
+    padding-left: 20px;
+    justify-content: center;
+}
+
+.popup-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #e0e0e0;
+}
+
+.popup-row .material-symbols-outlined {
+    font-size: 18px;
+    color: #90a4ae;
+}
+
+.popup-stat-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.popup-stat-block .material-symbols-outlined {
+    font-size: 22px;
+    color: #4fc3f7;
+}
+
+.popup-stat-value {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-num {
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.stat-label {
+    font-size: 11px;
+    color: #90a4ae;
+}
+
+.popup-footer {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: #78909c;
+}
+
+.edit-link {
+    color: #64b5f6;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.edit-link:hover {
+    text-decoration: underline;
+}

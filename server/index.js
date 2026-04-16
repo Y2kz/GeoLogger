@@ -10,6 +10,7 @@ const db = require('./db');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev_only';
 const PORT = process.env.PORT || 3000;
@@ -217,10 +218,14 @@ app.all(['/index.php', '/'], async (req, res, next) => {
         function insertPosition(tId) {
             db.run(
               `INSERT INTO positions (track_id, lat, lng, altitude, speed, bearing, accuracy, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                  tId, lat, lon || payload.lng, altitude, speed, bearing, accuracy, 
-                  time ? new Date(parseInt(time) * 1000).toISOString() : new Date().toISOString()
-              ],
+          [
+              tId, lat, lon || payload.lng, 
+              altitude !== undefined ? altitude : null, 
+              speed !== undefined ? speed : null, 
+              bearing !== undefined ? bearing : null, 
+              accuracy !== undefined ? accuracy : null, 
+              time ? new Date(parseInt(time) * 1000).toISOString() : new Date().toISOString()
+          ],
               (err) => {
                   if (err) return res.status(500).json({ error: true });
                   res.json({ error: false, message: 'Position added' });
