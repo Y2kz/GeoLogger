@@ -474,15 +474,15 @@ function Dashboard({ token, onLogout }) {
                    
                    <div style={{marginBottom: '20px', borderBottom: '1px solid var(--md-sys-color-outline-variant)', paddingBottom: '20px'}}>
                        <h4 style={{marginBottom: '10px'}}>Add New User</h4>
-                       <form onSubmit={handleCreateUser} style={{display: 'flex', gap: '8px'}}>
-                           <input type="text" placeholder="Username" className="md-input" style={{flex: 1, margin: 0}} value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
-                           <input type="password" placeholder="Password" className="md-input" style={{flex: 1, margin: 0}} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
-                           <select className="md-input" style={{width: '90px', margin: 0, height: '40px'}} value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
-                               <option value="user">User</option>
-                               <option value="admin">Admin</option>
-                           </select>
-                           <button type="submit" className="md-button primary" style={{padding: '0 16px', height: '40px', margin: 0}}>Add</button>
-                       </form>
+                       <form onSubmit={handleCreateUser} style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+                            <input type="text" placeholder="Username" className="md-input" style={{flex: 2, margin: 0, padding: '10px 16px', height: '48px'}} value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
+                            <input type="password" placeholder="Password" className="md-input" style={{flex: 2, margin: 0, padding: '10px 16px', height: '48px'}} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
+                            <select className="md-input" style={{flex: 1, margin: 0, height: '48px', padding: '0 12px', cursor: 'pointer', appearance: 'auto'}} value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                            <button type="submit" className="md-button primary" style={{width: 'auto', padding: '0 24px', height: '48px', margin: 0, borderRadius: '8px'}}>Add</button>
+                        </form>
                    </div>
                    
                    <div style={{maxHeight: '300px', overflowY: 'auto'}}>
