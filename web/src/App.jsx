@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet'
+import timezones from './timezones.json';
 
 function MapFitter({ positions }) {
   const map = useMap();
@@ -32,8 +33,20 @@ function App() {
   const defaultTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const [timeZone, setTimeZone] = useState(localStorage.getItem('timezone') || defaultTz);
 
-  // Inject all 450+ globally supported IANA Timezones dynamically natively supported by the Browser/Linux kernel!
-  const timezonesArray = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [defaultTz];
+  const timezonesArray = timezones;
+
+  const getTzLabel = (tz) => {
+    const parts = tz.split('/');
+    if (parts.length >= 3) {
+      // e.g. America/Argentina/Buenos_Aires -> Argentina - Buenos Aires
+      return `${parts[1].replace(/_/g, ' ')} - ${parts[2].replace(/_/g, ' ')}`;
+    }
+    if (parts.length === 2) {
+      // e.g. Europe/Paris -> Paris
+      return parts[1].replace(/_/g, ' ');
+    }
+    return tz;
+  };
   
   const [themePref, setThemePref] = useState(localStorage.getItem('themePref') || 'auto');
 
@@ -330,7 +343,7 @@ function App() {
              </label>
              <div style={{display:'flex', flex: '100%', gap: '5px', marginTop: '5px'}}>
                  <select value={timeZone} onChange={e => handleTzChange(e.target.value)} style={{flex: 1, padding: '5px'}}>
-                    {timezonesArray.map(tz => <option key={tz} value={tz}>{tz.split('/')[1]?.replace(/_/g,' ') || tz}</option>)}
+                    {timezonesArray.map(tz => <option key={tz} value={tz}>{getTzLabel(tz)}</option>)}
                  </select>
                  <button className="md-button secondary" onClick={handleClearAll} style={{flex: 1, color: 'var(--md-sys-color-error)', padding: '5px'}}>
                      Clear DB
