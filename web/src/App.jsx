@@ -36,15 +36,6 @@ function App() {
   const timezonesArray = timezones;
 
   const getTzLabel = (tz) => {
-    const parts = tz.split('/');
-    if (parts.length >= 3) {
-      // e.g. America/Argentina/Buenos_Aires -> Argentina - Buenos Aires
-      return `${parts[1].replace(/_/g, ' ')} - ${parts[2].replace(/_/g, ' ')}`;
-    }
-    if (parts.length === 2) {
-      // e.g. Europe/Paris -> Paris
-      return parts[1].replace(/_/g, ' ');
-    }
     return tz;
   };
   
